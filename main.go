@@ -5,15 +5,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/cenk/backoff"
+	"github.com/monzo/typhon"
 	"os"
 	"os/exec"
 	"os/signal"
 	"strings"
-	"time"
 	"syscall"
-
-	"github.com/cenk/backoff"
-	"github.com/monzo/typhon"
+	"time"
 )
 
 // ServerInfo ... represents the response from Envoy's server info endpoint
@@ -44,19 +43,23 @@ func main() {
 	}
 
 	// If an envoy API was set and config is set to wait on envoy
-	if config.EnvoyAdminAPI != "" {
-		if blockingCtx := waitForEnvoy(); blockingCtx != nil {
-			<-blockingCtx.Done()
-			err := blockingCtx.Err()
-			if err == nil || errors.Is(err, context.Canceled) {
-				log("Blocking finished, Envoy has started")
-			} else if errors.Is(err, context.DeadlineExceeded) && config.QuitWithoutEnvoyTimeout > time.Duration(0) {
-				log("Blocking timeout reached and Envoy has not started, exiting scuttle")
-				os.Exit(1)
-			} else if errors.Is(err, context.DeadlineExceeded) {
-				log("Blocking timeout reached and Envoy has not started, continuing with passed in executable")
-			} else {
-				panic(err.Error())
+	if config.GenericQuitOnly {
+		log("Generic Quit Only is set. Ignore Envoy configuration")
+	} else {
+		if config.EnvoyAdminAPI != "" {
+			if blockingCtx := waitForEnvoy(); blockingCtx != nil {
+				<-blockingCtx.Done()
+				err := blockingCtx.Err()
+				if err == nil || errors.Is(err, context.Canceled) {
+					log("Blocking finished, Envoy has started")
+				} else if errors.Is(err, context.DeadlineExceeded) && config.QuitWithoutEnvoyTimeout > time.Duration(0) {
+					log("Blocking timeout reached and Envoy has not started, exiting scuttle")
+					os.Exit(1)
+				} else if errors.Is(err, context.DeadlineExceeded) {
+					log("Blocking timeout reached and Envoy has not started, continuing with passed in executable")
+				} else {
+					panic(err.Error())
+				}
 			}
 		}
 	}
@@ -70,11 +73,11 @@ func main() {
 	var proc *os.Process
 	stop := make(chan os.Signal, 2)
 	signal.Notify(stop, syscall.SIGINT) // Only listen to SIGINT until after child proc starts
-	
+
 	// Pass signals to the child process
 	// This takes an OS signal and passes to the child process scuttle starts (proc)
 	go func() {
-		
+
 		for sig := range stop {
 			if sig == syscall.SIGURG {
 				// SIGURG is used by Golang for it's own purposes, ignore it as these signals
@@ -118,6 +121,9 @@ func main() {
 func kill(exitCode int) {
 	var logLineUnformatted = "Kill received: (Action: %s, Reason: %s, Exit Code: %d)"
 	switch {
+	case config.GenericQuitOnly:
+		log(fmt.Sprintf(logLineUnformatted, "Generic Kill", "GENERIC_QUIT_ONLY is true", exitCode))
+		killGenericEndpoints()
 	case config.EnvoyAdminAPI == "":
 		log(fmt.Sprintf(logLineUnformatted, "Skipping Istio kill", "ENVOY_ADMIN_API not set", exitCode))
 	case !strings.Contains(config.EnvoyAdminAPI, "127.0.0.1") && !strings.Contains(config.EnvoyAdminAPI, "localhost"):
