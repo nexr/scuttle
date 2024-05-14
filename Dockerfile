@@ -1,5 +1,5 @@
 FROM golang:1.17.9-buster AS build
-ARG VERSION="local"
+ARG VERSION="1.3.7-nep"
 COPY . /app
 WORKDIR /app
 RUN go get -d
